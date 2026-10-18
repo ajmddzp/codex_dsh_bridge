@@ -1,0 +1,3 @@
+import {spawn} from 'node:child_process';
+export function command(command:string,args:string[],cwd?:string):Promise<{code:number;stdout:string;stderr:string}>{return new Promise((resolve,reject)=>{const p=spawn(command,args,{cwd,stdio:['ignore','pipe','pipe'],shell:false});let stdout='',stderr='';p.stdout.on('data',b=>stdout+=b);p.stderr.on('data',b=>stderr+=b);p.on('error',reject);p.on('close',code=>resolve({code:code??1,stdout,stderr}));});}
+export function killGroup(pid:number,signal:NodeJS.Signals='SIGTERM'){try{process.kill(-pid,signal);}catch(e){if((e as NodeJS.ErrnoException).code!=='ESRCH')throw e;}}

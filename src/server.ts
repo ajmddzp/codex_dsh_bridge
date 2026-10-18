@@ -1,0 +1,12 @@
+import {McpServer} from '@modelcontextprotocol/sdk/server/mcp.js';
+import {StdioServerTransport} from '@modelcontextprotocol/sdk/server/stdio.js';
+import {z} from 'zod';
+import {submit,status,result,cancel,reconcile} from './manager.js';
+const server=new McpServer({name:'codex-deepseek-bridge',version:'0.1.0'},{instructions:'Delegate only bounded coding tasks. Require an explicit Git workspace, acceptance criteria, timeout, and mode. Work runs in a separate worktree from HEAD. Inspect the returned diff and test evidence before accepting. Never automatically apply changes. Explicitly authorize deletion, installs, or expensive jobs.'});
+const answer=(v:unknown)=>({content:[{type:'text' as const,text:JSON.stringify(v)}]});
+const guarded=async(fn:()=>Promise<unknown>)=>{try{return answer(await fn());}catch(e){return {isError:true,...answer({error:(e as Error).message})};}};
+server.tool('delegate_task','Start an isolated DeepSeek Harness coding task',{task:z.string().min(1).max(20000),workspace:z.string(),acceptance_criteria:z.array(z.string().min(1)).min(1),timeout:z.number().int().min(10).max(3600),mode:z.enum(['read_only','write']),allow_dependency_install:z.boolean().optional(),allow_expensive_commands:z.boolean().optional(),allow_deletion:z.boolean().optional()},input=>guarded(()=>submit(input)));
+server.tool('get_task_status','Get task status and progress',{task_id:z.string().uuid()},input=>guarded(()=>status(input.task_id)));
+server.tool('get_task_result','Get final reply, diff, changed files and tests',{task_id:z.string().uuid()},input=>guarded(()=>result(input.task_id)));
+server.tool('cancel_task','Cancel a running task and its process group',{task_id:z.string().uuid()},input=>guarded(()=>cancel(input.task_id)));
+await reconcile();const transport=new StdioServerTransport();await server.connect(transport);
