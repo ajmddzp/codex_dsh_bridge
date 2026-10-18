@@ -1,6 +1,6 @@
 {
   "name": "codex-deepseek-bridge",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Local MCP bridge from Codex to DeepSeek Harness headless",
   "type": "module",
   "license": "MIT",
@@ -8,7 +8,7 @@
     "node": ">=24"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json && esbuild src/server.ts src/worker.ts --bundle --platform=node --format=esm --outdir=bundle --outbase=src",
+    "build": "tsc -p tsconfig.json && esbuild src/server.ts src/worker.ts src/agent-worker.ts --bundle --platform=node --format=esm --outdir=bundle --outbase=src",
     "test": "npm run build && node --test dist/tests/*.test.js",
     "check": "npm test"
   },

@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "codex-deepseek-bridge",
-  "version": "0.1.0",
-  "description": "Delegate isolated coding tasks to DeepSeek Harness from Codex",
+  "version": "0.2.0",
+  "description": "Delegate coding tasks and run persistent DeepSeek Harness subagents from Codex",
   "license": "MIT",
-  "extensions": {"com.openai": {"requires_local_executor": true, "interface": {"displayName": "Codex DeepSeek Bridge", "shortDescription": "Delegate isolated coding tasks to DeepSeek Harness", "developerName": "Codex DeepSeek Bridge contributors", "category": "Developer Tools", "capabilities": ["Read", "Write"]}}}
+  "extensions": {"com.openai": {"requires_local_executor": true, "interface": {"displayName": "Codex DeepSeek Bridge", "shortDescription": "Delegate tasks and use persistent DSH subagents", "developerName": "Codex DeepSeek Bridge contributors", "category": "Developer Tools", "capabilities": ["Read", "Write"]}}}
 }

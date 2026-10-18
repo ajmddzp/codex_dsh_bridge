@@ -21685,8 +21685,226 @@ async function cancel(id) {
   return { task_id: id, status: r.status };
 }
 
+// src/agent.ts
+import { spawn as spawn3 } from "node:child_process";
+import { randomUUID as randomUUID2 } from "node:crypto";
+import { mkdir as mkdir4, readFile as readFile4 } from "node:fs/promises";
+import { join as join3 } from "node:path";
+
+// src/agent-store.ts
+import { mkdir as mkdir3, readFile as readFile3, readdir as readdir2, rename as rename2, rm as rm2, stat as stat2, writeFile as writeFile2 } from "node:fs/promises";
+import { join as join2 } from "node:path";
+var validId = /^[a-f0-9-]{36}$/;
+var agentDir = () => join2(stateDir(), "agents");
+var agentPath = (id) => join2(agentDir(), `${id}.json`);
+var turnPath = (id, turn) => join2(agentDir(), id, `${turn}.json`);
+async function getAgent(id) {
+  if (!validId.test(id)) return;
+  try {
+    return JSON.parse(await readFile3(agentPath(id), "utf8"));
+  } catch (error2) {
+    if (error2.code === "ENOENT") return;
+    throw error2;
+  }
+}
+async function saveAgent(record2) {
+  await mkdir3(agentDir(), { recursive: true, mode: 448 });
+  const path = agentPath(record2.agent_id);
+  const temporary = `${path}.${process.pid}.tmp`;
+  await writeFile2(temporary, JSON.stringify(record2, null, 2), { mode: 384 });
+  await rename2(temporary, path);
+}
+async function updateAgent(id, mutate) {
+  if (!validId.test(id)) throw Error("Invalid agent ID");
+  await mkdir3(agentDir(), { recursive: true, mode: 448 });
+  const lock = `${agentPath(id)}.lock`;
+  const deadline = Date.now() + 5e3;
+  while (true) {
+    try {
+      await mkdir3(lock);
+      break;
+    } catch (error2) {
+      if (error2.code !== "EEXIST") throw error2;
+      try {
+        if (Date.now() - (await stat2(lock)).mtimeMs > 3e4) await rm2(lock, { recursive: true, force: true });
+      } catch (staleError) {
+        if (staleError.code !== "ENOENT") throw staleError;
+      }
+      if (Date.now() >= deadline) throw Error("Agent state is busy");
+      await new Promise((resolve2) => setTimeout(resolve2, 25));
+    }
+  }
+  try {
+    const record2 = await getAgent(id);
+    if (!record2) throw Error("Unknown agent ID");
+    mutate(record2);
+    record2.updated_at = (/* @__PURE__ */ new Date()).toISOString();
+    await saveAgent(record2);
+    return record2;
+  } finally {
+    await rm2(lock, { recursive: true, force: true });
+  }
+}
+async function listAgents() {
+  await mkdir3(agentDir(), { recursive: true, mode: 448 });
+  const names = await readdir2(agentDir());
+  const records = await Promise.all(names.filter((name) => /^[a-f0-9-]{36}\.json$/.test(name)).map((name) => getAgent(name.slice(0, -5))));
+  return records.filter((record2) => record2 !== void 0);
+}
+async function saveTurn(id, turn) {
+  if (!validId.test(id)) throw Error("Invalid agent ID");
+  const directory = join2(agentDir(), id);
+  await mkdir3(directory, { recursive: true, mode: 448 });
+  const path = turnPath(id, turn.turn);
+  const temporary = `${path}.${process.pid}.tmp`;
+  await writeFile2(temporary, JSON.stringify(turn, null, 2), { mode: 384 });
+  await rename2(temporary, path);
+}
+async function getTurn(id, turn) {
+  if (!validId.test(id) || !Number.isSafeInteger(turn) || turn < 1) return;
+  try {
+    return JSON.parse(await readFile3(turnPath(id, turn), "utf8"));
+  } catch (error2) {
+    if (error2.code === "ENOENT") return;
+    throw error2;
+  }
+}
+async function getTurns(id, limit) {
+  const record2 = await getAgent(id);
+  if (!record2) throw Error("Unknown agent ID");
+  const start = Math.max(1, record2.turns - limit + 1);
+  const result2 = await Promise.all(Array.from({ length: record2.turns - start + 1 }, (_, i) => getTurn(id, start + i)));
+  return result2.filter((turn) => turn !== void 0);
+}
+
+// src/agent.ts
+async function matchesProcess(pid, fragment) {
+  if (process.platform !== "linux" || !Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    return (await readFile4(`/proc/${pid}/cmdline`, "utf8")).includes(fragment);
+  } catch {
+    return false;
+  }
+}
+async function createDeepSeekAgent(input) {
+  if (!input.role.trim() || input.role.length > 5e3) throw Error("role must contain 1\u20135000 characters");
+  if (input.initial_context && input.initial_context.length > 2e4) throw Error("initial_context must be at most 20000 characters");
+  const workspace = await validate({ task: "Inspect this project", workspace: input.workspace, acceptance_criteria: ["Report findings"], timeout: 60, mode: input.mode });
+  const id = randomUUID2();
+  await mkdir4(join3(agentDir(), id), { recursive: true, mode: 448 });
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  const record2 = { agent_id: id, workspace, role: input.role, initial_context: input.initial_context, mode: input.mode, status: "idle", created_at: now, updated_at: now, turns: 0 };
+  await saveAgent(record2);
+  return record2;
+}
+async function sendDeepSeekMessage(input) {
+  if (!input.message.trim() || input.message.length > 2e4) throw Error("message must contain 1\u201320000 characters");
+  if (!Number.isInteger(input.timeout_seconds) || input.timeout_seconds < 10 || input.timeout_seconds > 3600) throw Error("timeout_seconds must be 10\u20133600");
+  const prior = await getAgent(input.agent_id);
+  if (!prior) throw Error("Unknown agent ID");
+  if (prior.status !== "idle") throw Error(`Agent is ${prior.status}`);
+  await validate({ task: prior.mode === "read_only" ? "Inspect this project" : input.message, workspace: prior.workspace, acceptance_criteria: ["Return evidence"], timeout: input.timeout_seconds, mode: prior.mode, allow_dependency_install: input.allow_dependency_install, allow_expensive_commands: input.allow_expensive_commands, allow_deletion: input.allow_deletion });
+  const record2 = await updateAgent(input.agent_id, (current) => {
+    if (current.status !== "idle") throw Error(`Agent is ${current.status}`);
+    current.status = "running";
+    current.turns += 1;
+    current.current_turn = current.turns;
+    current.latest_progress = "queued";
+    current.latest_error = void 0;
+  });
+  const turn = { turn: record2.turns, message: input.message, timeout_seconds: input.timeout_seconds, allow_dependency_install: input.allow_dependency_install, allow_expensive_commands: input.allow_expensive_commands, allow_deletion: input.allow_deletion, status: "running", started_at: (/* @__PURE__ */ new Date()).toISOString() };
+  await saveTurn(input.agent_id, turn);
+  const worker = new URL("./agent-worker.js", import.meta.url).pathname;
+  const child = spawn3(process.execPath, [worker, input.agent_id, String(turn.turn)], { detached: true, stdio: "ignore", env: { ...process.env } });
+  if (!child.pid) {
+    turn.status = "failed";
+    turn.error = "Could not start agent worker";
+    turn.ended_at = (/* @__PURE__ */ new Date()).toISOString();
+    await saveTurn(input.agent_id, turn);
+    await updateAgent(input.agent_id, (current) => {
+      current.status = "idle";
+      current.current_turn = void 0;
+      current.latest_error = turn.error;
+    });
+    return turn;
+  }
+  child.unref();
+  await updateAgent(input.agent_id, (current) => {
+    current.worker_pid = child.pid;
+  });
+  return turn;
+}
+async function getDeepSeekAgentStatus(id) {
+  const record2 = await getAgent(id);
+  if (!record2) throw Error("Unknown agent ID");
+  if (record2.status === "running" && record2.worker_pid && !await matchesProcess(record2.worker_pid, id)) {
+    return markInterrupted(record2);
+  }
+  return record2;
+}
+async function markInterrupted(record2) {
+  if (record2.harness_pid && await matchesProcess(record2.harness_pid, "headless")) killGroup(record2.harness_pid);
+  const turn = record2.current_turn ? await getTurn(record2.agent_id, record2.current_turn) : void 0;
+  if (turn?.status === "running") {
+    turn.status = "failed";
+    turn.error = "Agent worker exited before completing the turn";
+    turn.ended_at = (/* @__PURE__ */ new Date()).toISOString();
+    await saveTurn(record2.agent_id, turn);
+  }
+  return updateAgent(record2.agent_id, (current) => {
+    if (current.status === "running") {
+      current.status = "idle";
+      current.current_turn = void 0;
+      current.worker_pid = void 0;
+      current.harness_pid = void 0;
+      current.latest_error = turn?.error;
+    }
+  });
+}
+async function getDeepSeekAgentHistory(id, limit = 20) {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw Error("limit must be 1\u2013100");
+  await getDeepSeekAgentStatus(id);
+  return getTurns(id, limit);
+}
+async function listDeepSeekAgents() {
+  const records = await listAgents();
+  return records.sort((a, b) => b.created_at.localeCompare(a.created_at));
+}
+async function closeDeepSeekAgent(id) {
+  const record2 = await updateAgent(id, (current) => {
+    current.status = "closed";
+    current.latest_progress = "closed";
+  });
+  if (record2.worker_pid && await matchesProcess(record2.worker_pid, id)) {
+    try {
+      process.kill(record2.worker_pid, "SIGTERM");
+    } catch {
+    }
+  }
+  if (record2.harness_pid && await matchesProcess(record2.harness_pid, "headless")) killGroup(record2.harness_pid);
+  if (record2.current_turn) {
+    const turn = await getTurn(id, record2.current_turn);
+    if (turn?.status === "running") {
+      turn.status = "cancelled";
+      turn.ended_at = (/* @__PURE__ */ new Date()).toISOString();
+      turn.error = "Agent closed by caller";
+      await saveTurn(id, turn);
+    }
+  }
+  return updateAgent(id, (current) => {
+    current.current_turn = void 0;
+    current.worker_pid = void 0;
+    current.harness_pid = void 0;
+  });
+}
+async function reconcileDeepSeekAgents() {
+  for (const record2 of await listAgents()) {
+    if (record2.status === "running" && (!record2.worker_pid || !await matchesProcess(record2.worker_pid, record2.agent_id))) await markInterrupted(record2);
+  }
+}
+
 // src/server.ts
-var server = new McpServer({ name: "codex-deepseek-bridge", version: "0.1.0" }, { instructions: "Delegate only bounded coding tasks. Require an explicit Git workspace, acceptance criteria, timeout, and mode. Work runs in a separate worktree from HEAD. Inspect the returned diff and test evidence before accepting. Never automatically apply changes. Explicitly authorize deletion, installs, or expensive jobs." });
+var server = new McpServer({ name: "codex-deepseek-bridge", version: "0.2.0" }, { instructions: "Delegate bounded coding tasks or create a persistent DeepSeek Harness subagent. One-shot tasks run in disposable Git worktrees. Persistent agents use the selected live workspace and resume the same Harness session across messages. Codex plans, supervises, and reviews results." });
 var answer = (v) => ({ content: [{ type: "text", text: JSON.stringify(v) }] });
 var guarded = async (fn) => {
   try {
@@ -21699,6 +21917,13 @@ server.tool("delegate_task", "Start an isolated DeepSeek Harness coding task", {
 server.tool("get_task_status", "Get task status and progress", { task_id: external_exports.string().uuid() }, (input) => guarded(() => status(input.task_id)));
 server.tool("get_task_result", "Get final reply, diff, changed files and tests", { task_id: external_exports.string().uuid() }, (input) => guarded(() => result(input.task_id)));
 server.tool("cancel_task", "Cancel a running task and its process group", { task_id: external_exports.string().uuid() }, (input) => guarded(() => cancel(input.task_id)));
+server.tool("create_deepseek_agent", "Create a persistent DeepSeek Harness subagent in a stable live workspace", { workspace: external_exports.string(), role: external_exports.string().min(1).max(5e3), initial_context: external_exports.string().max(2e4).optional(), mode: external_exports.enum(["read_only", "write"]) }, (input) => guarded(() => createDeepSeekAgent(input)));
+server.tool("send_deepseek_message", "Send one asynchronous turn to a persistent agent; later turns resume its Harness session", { agent_id: external_exports.string().uuid(), message: external_exports.string().min(1).max(2e4), timeout_seconds: external_exports.number().int().min(10).max(3600), allow_dependency_install: external_exports.boolean().optional(), allow_expensive_commands: external_exports.boolean().optional(), allow_deletion: external_exports.boolean().optional() }, (input) => guarded(() => sendDeepSeekMessage(input)));
+server.tool("get_deepseek_agent_status", "Get a persistent agent status and current Harness session ID", { agent_id: external_exports.string().uuid() }, (input) => guarded(() => getDeepSeekAgentStatus(input.agent_id)));
+server.tool("get_deepseek_agent_history", "Get recent messages, replies, errors and log paths for a persistent agent", { agent_id: external_exports.string().uuid(), limit: external_exports.number().int().min(1).max(100).optional() }, (input) => guarded(() => getDeepSeekAgentHistory(input.agent_id, input.limit)));
+server.tool("list_deepseek_agents", "List persistent DeepSeek subagents", {}, () => guarded(() => listDeepSeekAgents()));
+server.tool("close_deepseek_agent", "Close an agent and cancel its running turn, preserving history", { agent_id: external_exports.string().uuid() }, (input) => guarded(() => closeDeepSeekAgent(input.agent_id)));
 await reconcile();
+await reconcileDeepSeekAgents();
 var transport = new StdioServerTransport();
 await server.connect(transport);

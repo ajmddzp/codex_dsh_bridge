@@ -87,11 +87,15 @@ import { spawn as spawn2 } from "node:child_process";
 import { createWriteStream, existsSync } from "node:fs";
 import { dirname, join as join3 } from "node:path";
 import { fileURLToPath } from "node:url";
+
+// src/redact.ts
 function redact(value) {
   const key = process.env.DEEPSEEK_API_KEY;
   const withoutEnvKey = key ? value.replaceAll(key, "[REDACTED]") : value;
   return withoutEnvKey.replace(/sk-[A-Za-z0-9_-]{20,}/g, "[REDACTED]");
 }
+
+// src/adapter.ts
 function savedCredentialsPatch() {
   let dir = dirname(fileURLToPath(import.meta.url));
   for (let i = 0; i < 4; i++) {

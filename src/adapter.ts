@@ -3,7 +3,7 @@ import {createWriteStream,existsSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import type {TaskInput} from './types.js';
-function redact(value:string){const key=process.env.DEEPSEEK_API_KEY;const withoutEnvKey=key?value.replaceAll(key,'[REDACTED]'):value;return withoutEnvKey.replace(/sk-[A-Za-z0-9_-]{20,}/g,'[REDACTED]');}
+import {redact} from './redact.js';
 function savedCredentialsPatch(){let dir=dirname(fileURLToPath(import.meta.url));for(let i=0;i<4;i++){const patch=join(dir,'config','saved-credentials.patch.yml');if(existsSync(patch))return patch;dir=dirname(dir);}throw Error('Bundled saved-credentials patch is missing');}
 export interface AgentRun {child:ChildProcess; done:Promise<{code:number;reply:string;test_results:string[];error?:string}>;}
 export interface AgentAdapter {run(input:TaskInput,cwd:string,logs:{events:string;stderr:string},onProgress:(s:string)=>void):AgentRun;}
